@@ -12,6 +12,9 @@ use std::os::windows::fs::FileTypeExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -23,20 +26,12 @@ use windows_sys::Win32::Foundation::TRUE;
 use windows_sys::Win32::Foundation::WAIT_FAILED;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_DELETE_ON_CLOSE;
 use windows_sys::Win32::Storage::FileSystem::FILE_NOTIFY_CHANGE_CREATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_NOTIFY_CHANGE_DIR_NAME;
 use windows_sys::Win32::Storage::FileSystem::FILE_NOTIFY_CHANGE_FILE_NAME;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
-use windows_sys::Win32::Storage::FileSystem::CreateFileW;
-use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FindCloseChangeNotification;
 use windows_sys::Win32::Storage::FileSystem::FindFirstChangeNotificationW;
 use windows_sys::Win32::Storage::FileSystem::FindNextChangeNotification;
-use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Threading::CreateEventW;
 use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::SetEvent;
@@ -59,10 +54,14 @@ impl ProtectedMetadataGuard {
         self.deny_paths.iter()
     }
 
+    pub(crate) fn sentinel_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.sentinel_paths.iter()
+    }
+
     pub(crate) fn arm_sentinel_cleanup(&mut self) -> Result<()> {
-        for path in &self.sentinel_paths {
+        if !self.sentinel_paths.is_empty() {
             self.sentinel_handles
-                .push(open_delete_on_close_directory(path)?);
+                .push(start_sentinel_cleanup_watchdog(&self.sentinel_paths)?);
         }
         Ok(())
     }
@@ -76,9 +75,8 @@ impl ProtectedMetadataGuard {
     }
 
     pub(crate) fn cleanup_created_paths(&mut self) -> Result<Vec<PathBuf>> {
-        self.sentinel_handles.clear();
         let mut removed = Vec::new();
-        for path in self.monitored_paths.iter().chain(self.sentinel_paths.iter()) {
+        for path in &self.monitored_paths {
             let Some(existing_path) = existing_metadata_path(path)? else {
                 continue;
             };
@@ -86,6 +84,16 @@ impl ProtectedMetadataGuard {
                 .with_context(|| format!("failed to remove protected metadata {}", path.display()))?;
             removed.push(existing_path);
         }
+        // Sentinels are Codex-owned setup artifacts. Remove them, but do not
+        // report them as command-created protected metadata violations.
+        for path in &self.sentinel_paths {
+            let Some(existing_path) = existing_metadata_path(path)? else {
+                continue;
+            };
+            remove_metadata_path(&existing_path)
+                .with_context(|| format!("failed to remove protected metadata {}", path.display()))?;
+        }
+        self.sentinel_handles.clear();
         Ok(removed)
     }
 }
@@ -124,20 +132,16 @@ impl ProtectedMetadataRuntime {
     }
 }
 
-/// Layer: Windows sentinel cleanup handle. Holds a delete-on-close directory
-/// handle for one Codex-created sentinel so forced parent-process termination
-/// does not leave a protected metadata artifact behind.
+/// Layer: Windows sentinel cleanup watchdog. Owns a helper process that removes
+/// Codex-created sentinels if the parent process exits before normal cleanup.
 #[derive(Debug)]
-struct SentinelHandle(HANDLE);
+struct SentinelHandle {
+    child: Child,
+}
 
 impl Drop for SentinelHandle {
     fn drop(&mut self) {
-        if self.0 != 0 && self.0 != INVALID_HANDLE_VALUE {
-            unsafe {
-                CloseHandle(self.0);
-            }
-            self.0 = 0;
-        }
+        let _ = self.child.try_wait();
     }
 }
 
@@ -411,14 +415,11 @@ pub(crate) fn prepare_protected_metadata_targets(
             }
             ProtectedMetadataMode::MissingDenySentinel => {
                 let created = ensure_missing_deny_sentinel(&target.path)?;
-                let existing_deny_paths = protected_metadata_existing_deny_paths(&target.path);
-                if existing_deny_paths.is_empty() {
-                    deny_paths.push(target.path.clone());
-                } else {
-                    deny_paths.extend(existing_deny_paths);
-                }
                 if created {
                     sentinel_paths.push(target.path.clone());
+                } else {
+                    let existing_deny_paths = protected_metadata_existing_deny_paths(&target.path);
+                    deny_paths.extend(existing_deny_paths);
                 }
             }
         }
@@ -566,27 +567,36 @@ pub fn ensure_missing_deny_sentinel(path: &Path) -> Result<bool> {
     }
 }
 
-fn open_delete_on_close_directory(path: &Path) -> Result<SentinelHandle> {
-    let path_wide = to_wide(path);
-    let handle = unsafe {
-        CreateFileW(
-            path_wide.as_ptr(),
-            DELETE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_DELETE_ON_CLOSE,
-            0,
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(anyhow!(
-            "failed to arm protected metadata sentinel cleanup for {}: {}",
-            path.display(),
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(SentinelHandle(handle))
+fn start_sentinel_cleanup_watchdog(paths: &[PathBuf]) -> Result<SentinelHandle> {
+    let quoted_paths = paths
+        .iter()
+        .map(|path| format!("'{}'", powershell_single_quoted(&path.to_string_lossy())))
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        "$parent = {}; $paths = @({}); while ($true) {{ $alive = Get-Process -Id $parent -ErrorAction SilentlyContinue; $remaining = @($paths | Where-Object {{ Test-Path -LiteralPath $_ }}); if (-not $alive -or $remaining.Count -eq 0) {{ break }}; Start-Sleep -Milliseconds 200 }}; foreach ($p in $paths) {{ Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }}",
+        std::process::id(),
+        quoted_paths
+    );
+    let child = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start protected metadata sentinel cleanup watchdog")?;
+    Ok(SentinelHandle { child })
+}
+
+fn powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 fn is_directory_reparse_point(metadata: &Metadata) -> bool {
@@ -704,12 +714,18 @@ mod tests {
 
         assert!(target.is_dir(), "sentinel directory should be created");
         assert!(
-            guard.deny_paths().any(|path| path_text_key(path) == path_text_key(&target)),
-            "sentinel should be deny-listed"
+            guard
+                .sentinel_paths()
+                .any(|path| path_text_key(path) == path_text_key(&target)),
+            "sentinel should be tracked separately from inherited deny paths"
+        );
+        assert!(
+            guard.deny_paths().next().is_none(),
+            "fresh sentinel should not use inherited deny ACL setup"
         );
 
         let removed = guard.cleanup_created_paths().expect("cleanup");
-        assert_eq!(removed, vec![target.clone()]);
+        assert!(removed.is_empty(), "sentinel cleanup is not a command violation");
         assert!(!target.exists(), "sentinel directory should be removed");
     }
 
@@ -725,6 +741,14 @@ mod tests {
         }])
         .expect("guard");
 
+        assert!(
+            guard.deny_paths().any(|path| path_text_key(path) == path_text_key(&target)),
+            "pre-existing metadata should still use deny paths"
+        );
+        assert!(
+            guard.sentinel_paths().next().is_none(),
+            "pre-existing metadata should not be claimed as a sentinel"
+        );
         let removed = guard.cleanup_created_paths().expect("cleanup");
         assert!(removed.is_empty(), "pre-existing metadata is not Codex-owned cleanup");
         assert!(target.exists(), "pre-existing metadata should not be removed");
