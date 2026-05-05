@@ -413,7 +413,7 @@ impl CoreShellActionProvider {
                     EscalationExecution::Permissions(
                         EscalationPermissions::ResolvedPermissionProfile(
                             ResolvedPermissionProfile {
-                                permission_profile: permission_profile.clone(),
+                                permission_profile: self.permission_profile.clone(),
                             },
                         ),
                     )
