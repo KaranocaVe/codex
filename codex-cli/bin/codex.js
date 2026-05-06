@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Unified entry point for the Codex CLI.
+// Unified entry point for the Codex/Wildex CLI.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "fs";
@@ -12,13 +12,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
+const launcherName =
+  globalThis.CODEX_LAUNCHER_NAME === "wildex" ? "wildex" : "codex";
+const productName = launcherName === "wildex" ? "Wildex" : "Codex";
+const npmPackageName =
+  launcherName === "wildex" ? "@karanocave/wildex" : "@openai/codex";
+const platformPackagePrefix =
+  launcherName === "wildex" ? "@karanocave/wildex" : "@openai/codex";
+
 const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-  "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-  "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
+  "x86_64-unknown-linux-musl": `${platformPackagePrefix}-linux-x64`,
+  "aarch64-unknown-linux-musl": `${platformPackagePrefix}-linux-arm64`,
+  "x86_64-apple-darwin": `${platformPackagePrefix}-darwin-x64`,
+  "aarch64-apple-darwin": `${platformPackagePrefix}-darwin-arm64`,
+  "x86_64-pc-windows-msvc": `${platformPackagePrefix}-win32-x64`,
+  "aarch64-pc-windows-msvc": `${platformPackagePrefix}-win32-arm64`,
 };
 
 const { platform, arch } = process;
@@ -75,13 +83,14 @@ if (!platformPackage) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
 
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+const nativeBinaryName =
+  process.platform === "win32" ? `${launcherName}.exe` : launcherName;
 const localVendorRoot = path.join(__dirname, "..", "vendor");
 const localBinaryPath = path.join(
   localVendorRoot,
   targetTriple,
-  "codex",
-  codexBinaryName,
+  launcherName,
+  nativeBinaryName,
 );
 
 let vendorRoot;
@@ -95,10 +104,10 @@ try {
     const packageManager = detectPackageManager();
     const updateCommand =
       packageManager === "bun"
-        ? "bun install -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+        ? `bun install -g ${npmPackageName}@latest`
+        : `npm install -g ${npmPackageName}@latest`;
     throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+      `Missing optional dependency ${platformPackage}. Reinstall ${productName}: ${updateCommand}`,
     );
   }
 }
@@ -107,15 +116,15 @@ if (!vendorRoot) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
-      : "npm install -g @openai/codex@latest";
+      ? `bun install -g ${npmPackageName}@latest`
+      : `npm install -g ${npmPackageName}@latest`;
   throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+    `Missing optional dependency ${platformPackage}. Reinstall ${productName}: ${updateCommand}`,
   );
 }
 
 const archRoot = path.join(vendorRoot, targetTriple);
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+const binaryPath = path.join(archRoot, launcherName, nativeBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -171,6 +180,13 @@ const packageManagerEnvVar =
     ? "CODEX_MANAGED_BY_BUN"
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
+if (launcherName === "wildex") {
+  env[
+    detectPackageManager() === "bun"
+      ? "WILDEX_MANAGED_BY_BUN"
+      : "WILDEX_MANAGED_BY_NPM"
+  ] = "1";
+}
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

@@ -46,21 +46,39 @@ impl InstallContext {
         managed_by_bun: bool,
     ) -> Self {
         let codex_home = codex_utils_home_dir::find_codex_home().ok();
-        Self::from_exe_with_codex_home(
+        let wildex_home = find_wildex_home();
+        Self::from_exe_with_standalone_homes(
             is_macos,
             current_exe,
             managed_by_npm,
             managed_by_bun,
-            codex_home.as_deref(),
+            &[codex_home.as_deref(), wildex_home.as_deref()],
         )
     }
 
+    #[cfg(test)]
     fn from_exe_with_codex_home(
         is_macos: bool,
         current_exe: Option<&Path>,
         managed_by_npm: bool,
         managed_by_bun: bool,
         codex_home: Option<&Path>,
+    ) -> Self {
+        Self::from_exe_with_standalone_homes(
+            is_macos,
+            current_exe,
+            managed_by_npm,
+            managed_by_bun,
+            &[codex_home],
+        )
+    }
+
+    fn from_exe_with_standalone_homes(
+        is_macos: bool,
+        current_exe: Option<&Path>,
+        managed_by_npm: bool,
+        managed_by_bun: bool,
+        standalone_homes: &[Option<&Path>],
     ) -> Self {
         if managed_by_npm {
             return Self::Npm;
@@ -71,7 +89,8 @@ impl InstallContext {
         }
 
         if let Some(exe_path) = current_exe
-            && let Some(standalone_context) = standalone_install_context(exe_path, codex_home)
+            && let Some(standalone_context) =
+                standalone_install_context_for_homes(exe_path, standalone_homes)
         {
             return standalone_context;
         }
@@ -125,14 +144,37 @@ impl InstallContext {
     }
 }
 
-fn standalone_install_context(
+fn find_wildex_home() -> Option<PathBuf> {
+    if let Some(wildex_home) = std::env::var_os("WILDEX_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(wildex_home));
+    }
+
+    let home = if cfg!(windows) {
+        std::env::var_os("USERPROFILE")
+    } else {
+        std::env::var_os("HOME")
+    }?;
+
+    Some(PathBuf::from(home).join(".wildex"))
+}
+
+fn standalone_install_context_for_homes(
     exe_path: &Path,
-    codex_home: Option<&Path>,
+    standalone_homes: &[Option<&Path>],
 ) -> Option<InstallContext> {
+    for standalone_home in standalone_homes.iter().flatten() {
+        if let Some(context) = standalone_install_context(exe_path, standalone_home) {
+            return Some(context);
+        }
+    }
+    None
+}
+
+fn standalone_install_context(exe_path: &Path, standalone_home: &Path) -> Option<InstallContext> {
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
-    let canonical_codex_home = std::fs::canonicalize(codex_home?).ok()?;
+    let canonical_standalone_home = std::fs::canonicalize(standalone_home).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
-    let releases_root = canonical_codex_home
+    let releases_root = canonical_standalone_home
         .join("packages")
         .join(STANDALONE_PACKAGES_DIRNAME)
         .join(RELEASES_DIRNAME);

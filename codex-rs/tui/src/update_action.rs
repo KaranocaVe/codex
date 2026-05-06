@@ -6,15 +6,15 @@ use codex_install_context::StandalonePlatform;
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via `npm install -g @karanocave/wildex@latest`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via `bun install -g @karanocave/wildex@latest`.
     BunGlobalLatest,
-    /// Update via `brew upgrade codex`.
+    /// Update via `brew upgrade wildex`.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+    /// Update via the latest Wildex install.sh release asset.
     StandaloneUnix,
-    /// Update via `irm https://chatgpt.com/codex/install.ps1|iex`.
+    /// Update via the latest Wildex install.ps1 release asset.
     StandaloneWindows,
 }
 
@@ -36,16 +36,22 @@ impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@karanocave/wildex"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@karanocave/wildex"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "wildex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+                &[
+                    "-c",
+                    "curl -fsSL https://github.com/karanocave/codex/releases/latest/download/install.sh | sh",
+                ],
             ),
             UpdateAction::StandaloneWindows => (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"],
+                &[
+                    "-c",
+                    "irm https://github.com/karanocave/codex/releases/latest/download/install.ps1|iex",
+                ],
             ),
         }
     }
@@ -113,14 +119,20 @@ mod tests {
             UpdateAction::StandaloneUnix.command_args(),
             (
                 "sh",
-                &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"][..],
+                &[
+                    "-c",
+                    "curl -fsSL https://github.com/karanocave/codex/releases/latest/download/install.sh | sh",
+                ][..],
             )
         );
         assert_eq!(
             UpdateAction::StandaloneWindows.command_args(),
             (
                 "powershell",
-                &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"][..],
+                &[
+                    "-c",
+                    "irm https://github.com/karanocave/codex/releases/latest/download/install.ps1|iex",
+                ][..],
             )
         );
     }

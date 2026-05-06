@@ -5,6 +5,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$GitHubRepo = if ([string]::IsNullOrWhiteSpace($env:WILDEX_GITHUB_REPO)) {
+    "karanocave/codex"
+} else {
+    $env:WILDEX_GITHUB_REPO
+}
 
 function Write-Step {
     param(
@@ -61,10 +66,10 @@ function Get-ReleaseAssetMetadata {
         [string]$ResolvedVersion
     )
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubRepo/releases/tags/rust-v$ResolvedVersion"
     $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if ($null -eq $asset) {
-        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+        throw "Could not find release asset $AssetName for Wildex $ResolvedVersion."
     }
 
     $digestMatch = [regex]::Match([string]$asset.digest, "^sha256:([0-9a-fA-F]{64})$")
@@ -86,7 +91,7 @@ function Test-ArchiveDigest {
 
     $actualDigest = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualDigest -ne $ExpectedDigest) {
-        throw "Downloaded Codex archive checksum did not match release metadata. Expected $ExpectedDigest but got $actualDigest."
+        throw "Downloaded Wildex archive checksum did not match release metadata. Expected $ExpectedDigest but got $actualDigest."
     }
 }
 
@@ -154,9 +159,9 @@ function Resolve-Version {
         return $normalizedVersion
     }
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/latest"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GitHubRepo/releases/latest"
     if (-not $release.tag_name) {
-        Write-Error "Failed to resolve the latest Codex release version."
+        Write-Error "Failed to resolve the latest Wildex release version."
         exit 1
     }
 
@@ -165,15 +170,15 @@ function Resolve-Version {
 
 function Get-VersionFromBinary {
     param(
-        [string]$CodexPath
+        [string]$WildexPath
     )
 
-    if (-not (Test-Path -LiteralPath $CodexPath -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $WildexPath -PathType Leaf)) {
         return $null
     }
 
     try {
-        $versionOutput = & $CodexPath --version 2>$null
+        $versionOutput = & $WildexPath --version 2>$null
     } catch {
         return $null
     }
@@ -190,7 +195,7 @@ function Get-CurrentInstalledVersion {
         [string]$StandaloneCurrentDir
     )
 
-    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "codex.exe")
+    $standaloneVersion = Get-VersionFromBinary -WildexPath (Join-Path $StandaloneCurrentDir "wildex.exe")
     if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
         return $standaloneVersion
     }
@@ -216,7 +221,7 @@ function Test-OldStandaloneBinLayout {
         return $false
     }
 
-    $requiredFiles = @("codex.exe", "rg.exe")
+    $requiredFiles = @("wildex.exe", "rg.exe")
     foreach ($fileName in $requiredFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $VisibleBinDir $fileName) -PathType Leaf)) {
             return $false
@@ -224,7 +229,7 @@ function Test-OldStandaloneBinLayout {
     }
 
     $knownFiles = @(
-        "codex.exe",
+        "wildex.exe",
         "rg.exe",
         "codex-command-runner.exe",
         "codex-windows-sandbox.exe",
@@ -252,9 +257,9 @@ function Move-OldStandaloneBinIfApproved {
         return $null
     }
 
-    Write-Step "We found an older Codex install at $VisibleBinDir"
-    Write-WarningStep "To continue, Codex needs to update the install at this path."
-    if (-not (Prompt-YesNo "Replace it with the current Codex setup now?")) {
+    Write-Step "We found an older Wildex install at $VisibleBinDir"
+    Write-WarningStep "To continue, Wildex needs to update the install at this path."
+    if (-not (Prompt-YesNo "Replace it with the current Wildex setup now?")) {
         throw "Cannot replace older standalone install without confirmation: $VisibleBinDir"
     }
 
@@ -461,7 +466,7 @@ function Test-ReleaseIsComplete {
     }
 
     $expectedFiles = @(
-        "codex.exe",
+        "wildex.exe",
         "codex-resources\codex-command-runner.exe",
         "codex-resources\codex-windows-sandbox-setup.exe",
         "codex-resources\rg.exe"
@@ -475,8 +480,8 @@ function Test-ReleaseIsComplete {
     return (Split-Path -Leaf $ReleaseDir) -eq "$ExpectedVersion-$ExpectedTarget"
 }
 
-function Get-ExistingCodexCommand {
-    $existing = Get-Command codex -ErrorAction SilentlyContinue
+function Get-ExistingWildexCommand {
+    $existing = Get-Command wildex -ErrorAction SilentlyContinue
     if ($null -eq $existing) {
         return $null
     }
@@ -484,7 +489,7 @@ function Get-ExistingCodexCommand {
     return $existing.Source
 }
 
-function Get-ExistingCodexManager {
+function Get-ExistingWildexManager {
     param(
         [string]$ExistingPath,
         [string]$VisibleBinDir
@@ -514,14 +519,14 @@ function Get-ConflictingInstall {
         [string]$VisibleBinDir
     )
 
-    $existingPath = Get-ExistingCodexCommand
-    $manager = Get-ExistingCodexManager -ExistingPath $existingPath -VisibleBinDir $VisibleBinDir
+    $existingPath = Get-ExistingWildexCommand
+    $manager = Get-ExistingWildexManager -ExistingPath $existingPath -VisibleBinDir $VisibleBinDir
     if ($null -eq $manager) {
         return $null
     }
 
-    Write-Step "Detected existing $manager-managed Codex at $existingPath"
-    Write-WarningStep "Multiple managed Codex installs can be ambiguous because PATH order decides which one runs."
+    Write-Step "Detected existing $manager-managed Wildex at $existingPath"
+    Write-WarningStep "Multiple managed Wildex installs can be ambiguous because PATH order decides which one runs."
 
     return [PSCustomObject]@{
         Manager = $manager
@@ -541,33 +546,33 @@ function Maybe-HandleConflictingInstall {
     $manager = $Conflict.Manager
 
     $uninstallArgs = if ($manager -eq "bun") {
-        @("remove", "-g", "@openai/codex")
+        @("remove", "-g", "@karanocave/wildex")
     } else {
-        @("uninstall", "-g", "@openai/codex")
+        @("uninstall", "-g", "@karanocave/wildex")
     }
     $uninstallCommand = if ($manager -eq "bun") { "bun" } else { "npm" }
 
-    if (Prompt-YesNo "Uninstall the existing $manager-managed Codex now?") {
+    if (Prompt-YesNo "Uninstall the existing $manager-managed Wildex now?") {
         Write-Step "Running: $uninstallCommand $($uninstallArgs -join ' ')"
         try {
             & $uninstallCommand @uninstallArgs
         } catch {
-            Write-WarningStep "Failed to uninstall the existing $manager-managed Codex. Continuing with the standalone install."
+            Write-WarningStep "Failed to uninstall the existing $manager-managed Wildex. Continuing with the standalone install."
         }
     } else {
-        Write-WarningStep "Leaving the existing $manager-managed Codex installed. PATH order will determine which codex runs."
+        Write-WarningStep "Leaving the existing $manager-managed Wildex installed. PATH order will determine which wildex runs."
     }
 }
 
-function Test-VisibleCodexCommand {
+function Test-VisibleWildexCommand {
     param(
         [string]$VisibleBinDir
     )
 
-    $codexCommand = Join-Path $VisibleBinDir "codex.exe"
-    & $codexCommand --version *> $null
+    $wildexCommand = Join-Path $VisibleBinDir "wildex.exe"
+    & $wildexCommand --version *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw "Installed Codex command failed verification: $codexCommand --version"
+        throw "Installed Wildex command failed verification: $wildexCommand --version"
     }
 }
 
@@ -577,7 +582,7 @@ if ($env:OS -ne "Windows_NT") {
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    Write-Error "Codex requires a 64-bit version of Windows."
+    Write-Error "Wildex requires a 64-bit version of Windows."
     exit 1
 }
 
@@ -602,21 +607,21 @@ switch ($architecture) {
     }
 }
 
-$codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
-    Join-Path $env:USERPROFILE ".codex"
+$wildexHome = if ([string]::IsNullOrWhiteSpace($env:WILDEX_HOME)) {
+    Join-Path $env:USERPROFILE ".wildex"
 } else {
-    $env:CODEX_HOME
+    $env:WILDEX_HOME
 }
-$standaloneRoot = Join-Path $codexHome "packages\standalone"
+$standaloneRoot = Join-Path $wildexHome "packages\standalone"
 $releasesDir = Join-Path $standaloneRoot "releases"
 $currentDir = Join-Path $standaloneRoot "current"
 $lockPath = Join-Path $standaloneRoot "install.lock"
 
-$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin"
-if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
+$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\Karanocave\Wildex\bin"
+if ([string]::IsNullOrWhiteSpace($env:WILDEX_INSTALL_DIR)) {
     $visibleBinDir = $defaultVisibleBinDir
 } else {
-    $visibleBinDir = $env:CODEX_INSTALL_DIR
+    $visibleBinDir = $env:WILDEX_INSTALL_DIR
 }
 
 $currentVersion = Get-CurrentInstalledVersion -StandaloneCurrentDir $currentDir
@@ -625,11 +630,11 @@ $releaseName = "$resolvedVersion-$target"
 $releaseDir = Join-Path $releasesDir $releaseName
 
 if (-not [string]::IsNullOrWhiteSpace($currentVersion) -and $currentVersion -ne $resolvedVersion) {
-    Write-Step "Updating Codex CLI from $currentVersion to $resolvedVersion"
+    Write-Step "Updating Wildex CLI from $currentVersion to $resolvedVersion"
 } elseif (-not [string]::IsNullOrWhiteSpace($currentVersion)) {
-    Write-Step "Updating Codex CLI"
+    Write-Step "Updating Wildex CLI"
 } else {
-    Write-Step "Installing Codex CLI"
+    Write-Step "Installing Wildex CLI"
 }
 Write-Step "Detected platform: $platformLabel"
 Write-Step "Resolved version: $resolvedVersion"
@@ -637,8 +642,8 @@ Write-Step "Resolved version: $resolvedVersion"
 $conflictingInstall = Get-ConflictingInstall -VisibleBinDir $visibleBinDir
 $oldStandaloneBackup = $null
 
-$packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-install-" + [System.Guid]::NewGuid().ToString("N"))
+$packageAsset = "wildex-npm-$npmTag-$resolvedVersion.tgz"
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("wildex-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 try {
@@ -655,7 +660,7 @@ try {
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
             $assetMetadata = Get-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
 
-            Write-Step "Downloading Codex CLI"
+            Write-Step "Downloading Wildex CLI"
             Invoke-WebRequest -Uri $assetMetadata.Url -OutFile $archivePath
             Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $assetMetadata.Sha256
 
@@ -671,9 +676,9 @@ try {
             $resourcesDir = Join-Path $stagingDir "codex-resources"
             New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
             $copyMap = @{
-                "codex/codex.exe" = "codex.exe"
-                "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
-                "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                "wildex/wildex.exe" = "wildex.exe"
+                "wildex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
+                "wildex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
                 "path/rg.exe" = "codex-resources\rg.exe"
             }
 
@@ -695,7 +700,7 @@ try {
         $oldStandaloneBackup = Move-OldStandaloneBinIfApproved -VisibleBinDir $visibleBinDir -DefaultVisibleBinDir $defaultVisibleBinDir
         try {
             Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
-            Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
+            Test-VisibleWildexCommand -VisibleBinDir $visibleBinDir
         } catch {
             if ($null -ne $oldStandaloneBackup -and (Test-Path -LiteralPath $oldStandaloneBackup)) {
                 if (Test-Path -LiteralPath $visibleBinDir) {
@@ -739,12 +744,12 @@ if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
     }
 }
 
-Write-Step "Current PowerShell session: codex"
-Write-Step "Future PowerShell windows: open a new PowerShell window and run: codex"
-Write-Host "Codex CLI $resolvedVersion installed successfully."
+Write-Step "Current PowerShell session: wildex"
+Write-Step "Future PowerShell windows: open a new PowerShell window and run: wildex"
+Write-Host "Wildex CLI $resolvedVersion installed successfully."
 
-$codexCommand = Join-Path $visibleBinDir "codex.exe"
-if (Prompt-YesNo "Start Codex now?") {
-    Write-Step "Launching Codex"
-    & $codexCommand
+$wildexCommand = Join-Path $visibleBinDir "wildex.exe"
+if (Prompt-YesNo "Start Wildex now?") {
+    Write-Step "Launching Wildex"
+    & $wildexCommand
 }

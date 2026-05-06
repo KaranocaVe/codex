@@ -675,7 +675,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/karanocave/codex".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -690,7 +690,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/karanocave/codex/releases/latest"
                 .cyan()
                 .underlined(),
         ];
@@ -706,7 +706,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             format!("Run {} to update.", update_action.command_str())
         } else {
-            "See https://github.com/openai/codex for installation options.".to_string()
+            "See https://github.com/karanocave/codex for installation options.".to_string()
         };
         vec![
             Line::from("Update available!"),
@@ -714,7 +714,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),
-            Line::from("https://github.com/openai/codex/releases/latest"),
+            Line::from("https://github.com/karanocave/codex/releases/latest"),
         ]
     }
 }
