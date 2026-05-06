@@ -6,24 +6,13 @@ on:
       release-lto:
         required: true
         type: string
-    secrets:
-      AZURE_TRUSTED_SIGNING_CLIENT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_TENANT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_ENDPOINT:
-        required: true
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
-        required: true
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME:
-        required: true
 
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on:
+      group: ${{ matrix.runner_group }}
+      labels: ${{ matrix.runner_label }}
     # Windows release builds can exceed an hour on fat-LTO mainline releases,
     # so keep the timeout aligned with the top-level release build headroom.
     timeout-minutes: 90
@@ -42,46 +31,27 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            binaries: "wildex"
+            runner_group: codex-runners
+            runner_label: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            binaries: "wildex"
+            runner_group: codex-runners
+            runner_label: codex-windows-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runner_group: codex-runners
+            runner_label: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            bundle: app-server
-            binaries: "codex-app-server"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: app-server
-            binaries: "codex-app-server"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
-
+            runner_group: codex-runners
+            runner_label: codex-windows-arm64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Print runner specs (Windows)
@@ -138,16 +108,17 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on:
+      group: ${{ matrix.runner_group }}
+      labels: ${{ matrix.runner_label }}
     timeout-minutes: 90
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: codex-rs
     env:
-      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
+      WINDOWS_BINARIES: "wildex codex-windows-sandbox-setup codex-command-runner"
 
     strategy:
       fail-fast: false
@@ -155,14 +126,12 @@ jobs:
         include:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runner_group: codex-runners
+            runner_label: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runner_group: codex-runners
+            runner_label: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -179,12 +148,6 @@ jobs:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
 
-      - name: Download prebuilt Windows app-server binary
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: windows-binaries-${{ matrix.target }}-app-server
-          path: codex-rs/target/${{ matrix.target }}/release
-
       - name: Verify binaries
         shell: bash
         run: |
@@ -192,18 +155,6 @@ jobs:
           for binary in ${WINDOWS_BINARIES}; do
             ls -lh "target/${{ matrix.target }}/release/${binary}.exe"
           done
-
-      - name: Sign Windows binaries with Azure Trusted Signing
-        uses: ./.github/actions/windows-code-sign
-        with:
-          target: ${{ matrix.target }}
-          binaries: ${{ env.WINDOWS_BINARIES }}
-          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - name: Stage artifacts
         shell: bash
@@ -230,9 +181,9 @@ jobs:
           # For compatibility with environments that lack the `zstd` tool we
           # additionally create a `.tar.gz` and `.zip` for every Windows binary.
           # The end result is:
-          #   codex-<target>.zst
-          #   codex-<target>.tar.gz
-          #   codex-<target>.zip
+          #   wildex-<target>.zst
+          #   wildex-<target>.tar.gz
+          #   wildex-<target>.zip
           for f in "$dest"/*; do
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
@@ -252,9 +203,9 @@ jobs:
             # Create zip archive for Windows binaries.
             # Must run from inside the dest dir so 7z won't embed the
             # directory path inside the zip.
-            if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
-              # Bundle the sandbox helper binaries into the main codex zip so
-              # WinGet installs include the required helpers next to codex.exe.
+            if [[ "$base" == "wildex-${{ matrix.target }}.exe" ]]; then
+              # Bundle the sandbox helper binaries into the main Wildex zip so
+              # WinGet installs include the required helpers next to wildex.exe.
               # Fall back to the single-binary zip if the helpers are missing
               # to avoid breaking releases.
               bundle_dir="$(mktemp -d)"
